@@ -58,7 +58,7 @@ cls(u){const cs=db.classes.filter(c=>c.tid===u.id),ts=db.tasks.filter(t=>cs.some
 
 const ok=r=>{if(r.error)throw r.error;return r};
 async function load(){
- const q=t=>sb.from(t).select('*').order('created_at',{ascending:false,nullsFirst:false}).then(r=>r.data||[]);
+ const q=t=>{let b=sb.from(t).select('*');if(!['class_members','projects'].includes(t))b=b.order('created_at',{ascending:false});return b.then(r=>{if(r.error)console.error('Lỗi tải bảng '+t+': '+r.error.message);return r.data||[]})};
  const [pr,cl,mb,it,st,pj,tk,sm,pb]=await Promise.all(['profiles','classes','class_members','portfolio_items','field_stops','projects','tasks','submissions','community_items'].map(q));
  db={users:pr,
   classes:cl.map(c=>({id:c.id,tid:c.teacher_id,name:c.name,code:c.code})),
