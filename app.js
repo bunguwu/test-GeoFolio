@@ -1,20 +1,9 @@
-const K='geofolio',$=s=>document.querySelector(s);
+// GeoFolio, bản dùng Supabase. URL và khóa publishable được phép công khai; bảo mật do RLS đảm nhiệm.
+const SUPABASE_URL='https://pnmfhvylcvhooweusrzg.supabase.co',SUPABASE_KEY='sb_publishable_JCklJbw_i5JPnmtJjRXC0g_Gep9xfnW';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const $=s=>document.querySelector(s),d10=s=>String(s||'').slice(0,10);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let db={users:[],classes:[],members:[],items:[],stops:[],projects:[],tasks:[],subs:[],pub:[],session:null,gid:null};
-const LS='geofolio_ses';
-try{Object.assign(db,JSON.parse(localStorage.getItem(LS)||'{}'))}catch(e){}
-const pack=()=>{const {session,gid,...r}=db;return r};
-const st=o=>JSON.stringify(o,(k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort()):v);
-const sync=t=>{const e=$('#sync');if(e)e.textContent=t};
-let busy=false,dirty=false,last='',timer;
-const flush=async()=>{if(busy){dirty=true;return}busy=true;try{do{dirty=false;const p=pack();last=st(p);sync('Đang đồng bộ…');await STORE.push(p)}while(dirty);sync('Đã đồng bộ '+new Date().toLocaleTimeString('vi-VN'))}catch(e){sync('Lỗi đồng bộ: '+e.message)}busy=false};
-const save=()=>{try{localStorage.setItem(LS,JSON.stringify({session:db.session,gid:db.gid}))}catch(e){}dirty=true;clearTimeout(timer);timer=setTimeout(flush,300)};
-async function pull(first){try{const d=await STORE.pull();
- if(d&&d.users){if(!busy&&!dirty){const s=st(d);if(s!==last){last=s;Object.assign(db,d);const a=document.activeElement;if(first||!/INPUT|TEXTAREA|SELECT/.test(a?.tagName||''))draw()}}}
- else if(first)flush();
- if(!busy)sync('Đã kết nối '+new Date().toLocaleTimeString('vi-VN'))}catch(e){sync('Lỗi kết nối: '+e.message)}}
-const uid=()=>Math.random().toString(36).slice(2,9),today=()=>new Date().toISOString().slice(0,10);
-const me=()=>db.session==='guest'?{id:'g-'+db.gid,name:'Khách',role:'guest'}:db.users.find(u=>u.id===db.session);
+let db={users:[],classes:[],members:[],items:[],stops:[],projects:[],tasks:[],subs:[],pub:[]},cur=null;
 const NAV={student:[['home','▦','Tổng quan'],['port','▤','Hồ sơ năng lực'],['field','⌖','Nhật ký thực địa'],['proj','◫','Dự án học tập'],['rub','✓','Đánh giá & Rubric'],['comm','◎','Kho tư liệu']],teacher:[['cls','▣','Quản lý lớp học'],['comm','◎','Kho tư liệu']],guest:[['comm','◎','Kho tư liệu']]};
 const CRIT=['Độ chính xác dữ liệu','Phân tích không gian','Minh chứng thực địa','Trình bày & số hóa'];
 const LV=[['Dữ liệu thiếu/sai','Cơ bản chính xác','Chính xác, có nguồn','Kiểm chứng đa nguồn'],['Mô tả rời rạc','Nêu được phân bố','Giải thích hợp lí','Phân tích đa chiều'],['Ít minh chứng','Có ảnh/ghi chép','Đủ ảnh và tọa độ','Minh chứng rõ, xác thực'],['Khó theo dõi','Đúng cấu trúc','Trực quan, khoa học','Sáng tạo, dễ khai thác']];
@@ -66,31 +55,55 @@ cls(u){const cs=db.classes.filter(c=>c.tid===u.id),ts=db.tasks.filter(t=>cs.some
  <div class="card"><h3>Báo cáo học tập</h3><button class="btn" data-a="csv">Xuất báo cáo CSV</button>${csv?`<textarea rows="6" readonly>${esc(csv)}</textarea>`:''}</div>`}
 };
 
-function draw(){const u=me(),a=$('#app');if(!u){a.innerHTML=auth();return}if(!V[view]||!NAV[u.role].some(n=>n[0]===view))view=NAV[u.role][0][0];a.innerHTML=shell(u,V[view](u))}
-const enter=id=>{db.session=id;msg='';view='';tab='sr'};
-const reg=(d,role)=>{if(db.users.some(u=>u.email===d.email.toLowerCase()))return msg='Email đã được đăng ký.';const u={id:uid(),name:d.name,email:d.email.toLowerCase(),pw:btoa(unescape(encodeURIComponent(d.pw))),role};db.users.push(u);enter(u.id)};
+
+const ok=r=>{if(r.error)throw r.error;return r};
+async function load(){
+ const q=t=>sb.from(t).select('*').order('created_at',{ascending:false,nullsFirst:false}).then(r=>r.data||[]);
+ const [pr,cl,mb,it,st,pj,tk,sm,pb]=await Promise.all(['profiles','classes','class_members','portfolio_items','field_stops','projects','tasks','submissions','community_items'].map(q));
+ db={users:pr,
+  classes:cl.map(c=>({id:c.id,tid:c.teacher_id,name:c.name,code:c.code})),
+  members:mb.map(m=>({uid:m.student_id,cid:m.class_id})),
+  items:it.map(x=>({id:x.id,uid:x.student_id,title:x.title,type:x.type,desc:x.description,date:d10(x.created_at)})),
+  stops:st.map(x=>({id:x.id,uid:x.student_id,title:x.title,cat:x.category,lat:x.lat,lng:x.lng,note:x.note,date:d10(x.created_at)})),
+  projects:pj.map(x=>({id:x.id,uid:x.student_id,title:x.title,desc:x.description,due:x.due,progress:x.progress})),
+  tasks:tk.map(t=>({id:t.id,cid:t.class_id,type:t.type,title:t.title,due:t.due})),
+  subs:sm.map(s=>({id:s.id,tid:s.task_id,uid:s.student_id,note:s.note,r:s.rubric,score:s.score,fb:s.feedback,by:'Giáo viên',gd:d10(s.graded_at)})),
+  pub:pb.map(x=>({id:x.id,owner:x.owner_id,author:x.author,title:x.title,place:x.place,desc:x.description,date:d10(x.created_at)}))};
+}
+async function enter(role){
+ cur=null;const {data:{session}}=await sb.auth.getSession();
+ if(session){const u=session.user;if(u.is_anonymous)cur={id:u.id,name:'Khách',role:'guest'};else{const {data}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle();cur=data}}
+ if(cur&&role&&cur.role!==role){await sb.auth.signOut();cur=null;msg='Tài khoản này không phải '+(role==='teacher'?'giáo viên':'học sinh')+'.'}
+ if(cur){view='';msg='';await load()}
+}
+function draw(){const u=cur,a=$('#app');if(!u){a.innerHTML=auth();return}if(!V[view]||!NAV[u.role].some(n=>n[0]===view))view=NAV[u.role][0][0];a.innerHTML=shell(u,V[view](u))}
+async function reg(d,role){const r=await sb.auth.signUp({email:d.email,password:d.pw,options:{data:{name:d.name,role}}});if(r.error)return msg=r.error.message;if(!r.data.session)return msg='Hãy mở email để xác nhận tài khoản, rồi đăng nhập.';await enter()}
+const ins=(t,row)=>sb.from(t).insert(row).then(ok);
 const H={
  trReg:d=>reg(d,'teacher'),srReg:d=>reg(d,'student'),
- login(d){const u=db.users.find(u=>u.email===d.email.toLowerCase()&&u.pw===btoa(unescape(encodeURIComponent(d.pw)))&&u.role===d.role);u?enter(u.id):msg='Sai email hoặc mật khẩu.'},
- guest(){db.gid=db.gid||uid();enter('guest')},
- join(d){const c=db.classes.find(c=>c.code===d.code.trim().toUpperCase()),u=me();if(!c)return msg='Không tìm thấy mã lớp.';if(db.members.some(m=>m.uid===u.id&&m.cid===c.id))return msg='Bạn đã ở trong lớp này.';db.members.push({uid:u.id,cid:c.id})},
- item(d){db.items.push({id:uid(),uid:me().id,date:today(),...d})},
- stop(d){db.stops.push({id:uid(),uid:me().id,date:today(),...d})},
- proj(d){db.projects.push({id:uid(),uid:me().id,progress:0,...d})},
- submit(d){db.subs.push({id:uid(),uid:me().id,date:today(),...d})},
- pub(d){const u=me();if(editId){const x=db.pub.find(x=>x.id===editId&&x.owner===u.id);if(x)Object.assign(x,d);editId=null}else db.pub.unshift({id:uid(),owner:u.id,author:u.name,date:today(),...d})},
- cls(d){db.classes.push({id:uid(),tid:me().id,name:d.name,code:Math.random().toString(36).slice(2,8).toUpperCase()})},
- task(d){db.tasks.push({id:uid(),...d})},
- grade(d){const s=db.subs.find(s=>s.id===d.sid);s.r=[0,1,2,3].map(i=>+d['r'+i]);s.score=(s.r.reduce((a,b)=>a+b)/4*2.5).toFixed(1);s.fb=d.fb;s.by=me().name;s.gd=today()}
+ async login(d){const r=await sb.auth.signInWithPassword({email:d.email,password:d.pw});if(r.error)return msg='Sai email hoặc mật khẩu.';await enter(d.role)},
+ async guest(){ok(await sb.auth.signInAnonymously());await enter()},
+ async join(d){const r=await sb.rpc('join_class',{p_code:d.code});if(r.error)msg=/mã lớp/.test(r.error.message)?'Không tìm thấy mã lớp.':r.error.message},
+ item:d=>ins('portfolio_items',{title:d.title,type:d.type,description:d.desc}),
+ stop:d=>ins('field_stops',{title:d.title,category:d.cat,lat:d.lat||null,lng:d.lng||null,note:d.note}),
+ proj:d=>ins('projects',{title:d.title,description:d.desc,due:d.due||null}),
+ submit:d=>ins('submissions',{task_id:d.tid,note:d.note}),
+ async pub(d){const row={title:d.title,place:d.place,description:d.desc};if(editId){ok(await sb.from('community_items').update(row).eq('id',editId));editId=null}else await ins('community_items',{...row,author:cur.name})},
+ cls:d=>ins('classes',{name:d.name}),
+ task:d=>ins('tasks',{class_id:d.cid,type:d.type,title:d.title,due:d.due}),
+ async grade(d){const r=[0,1,2,3].map(i=>+d['r'+i]);ok(await sb.from('submissions').update({rubric:r,score:(r.reduce((a,b)=>a+b)/4*2.5).toFixed(1),feedback:d.fb,graded_by:cur.id,graded_at:new Date().toISOString()}).eq('id',d.sid))}
 };
+const TBL={items:'portfolio_items',stops:'field_stops',projects:'projects',pub:'community_items'};
 const A={
- tab:d=>{tab=d.id;msg='';draw()},view:d=>{view=d.id;msg='';editId=null;draw()},out:()=>{db.session=null;save();draw()},
+ tab:d=>{tab=d.id;msg='';draw()},view:d=>{view=d.id;msg='';editId=null;draw()},
+ async out(){await sb.auth.signOut();cur=null;msg='';draw()},
  edit:d=>{editId=d.id;draw()},
- del(d){const u=me(),k=d.k,x=db[k].find(x=>x.id===d.id);if(x&&(x.uid===u.id||x.owner===u.id)){db[k]=db[k].filter(y=>y!==x);save();draw()}},
+ async del(d){try{ok(await sb.from(TBL[d.k]).delete().eq('id',d.id));await load()}catch(e){alert(e.message)}draw()},
  gps(){const m=$('#gpsmsg');if(!navigator.geolocation)return m.textContent='Trình duyệt không hỗ trợ GPS.';navigator.geolocation.getCurrentPosition(p=>{$('[name=lat]').value=p.coords.latitude.toFixed(6);$('[name=lng]').value=p.coords.longitude.toFixed(6);m.textContent='Đã lấy tọa độ.'},()=>m.textContent='Không lấy được vị trí, hãy nhập tay.')},
- csv(){const u=me(),rows=[['Lớp','Học sinh','Nhiệm vụ','Trạng thái','Điểm']];db.subs.forEach(s=>{const t=db.tasks.find(t=>t.id===s.tid),c=t&&db.classes.find(c=>c.id===t.cid);if(c&&c.tid===u.id)rows.push([c.name,db.users.find(x=>x.id===s.uid)?.name,t.title,s.r?'Đã chấm':'Chờ đánh giá',s.score||''])});csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n');draw()}
+ csv(){const u=cur,rows=[['Lớp','Học sinh','Nhiệm vụ','Trạng thái','Điểm']];db.subs.forEach(s=>{const t=db.tasks.find(t=>t.id===s.tid),c=t&&db.classes.find(c=>c.id===t.cid);if(c&&c.tid===u.id)rows.push([c.name,db.users.find(x=>x.id===s.uid)?.name,t.title,s.r?'Đã chấm':'Chờ đánh giá',s.score||''])});csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n');draw()}
 };
-document.addEventListener('submit',e=>{e.preventDefault();const f=e.target;msg='';H[f.dataset.f]?.(Object.fromEntries(new FormData(f)));save();draw()});
+document.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;msg='';try{await H[f.dataset.f]?.(Object.fromEntries(new FormData(f)));if(cur)await load()}catch(x){msg=x.message||String(x);if(cur)alert(msg)}draw()});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&b.dataset.a!=='prog')A[b.dataset.a]?.(b.dataset)});
-document.addEventListener('change',e=>{if(e.target.dataset.a==='prog'){const p=db.projects.find(p=>p.id===e.target.dataset.id);if(p){p.progress=e.target.value;save();draw()}}});
-draw();pull(true);setInterval(pull,8000);
+document.addEventListener('change',async e=>{if(e.target.dataset.a==='prog'){try{ok(await sb.from('projects').update({progress:+e.target.value}).eq('id',e.target.dataset.id));await load()}catch(x){alert(x.message)}draw()}});
+$('#app').textContent='Đang tải…';
+enter().then(draw,()=>{msg='Không kết nối được Supabase.';draw()});
